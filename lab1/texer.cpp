@@ -30,6 +30,7 @@ enum token_type {
 };
 
 class token {
+	string::size_type row, col;
 	token_type type;
 	string value;
 
@@ -39,9 +40,14 @@ public:
 		type = _type;
 		value = _value;
 	}
+	token(string::size_type _row, string::size_type _col, token_type _type, string& _value) {
+		row = _row, col = _col;
+		type = _type;
+		value = _value;
+	}
 
 	friend ostream& operator << (ostream& os, token& t) {
-		os << "[" << token_type_name[t.type] << ", " << t.value << "]";
+		os << "[" << t.row << ": " << t.col << ", " << token_type_name[t.type] << ", " << t.value << "]";
 		return os;
 	}
 };
@@ -52,7 +58,7 @@ class texer {
 
 private:
 	set<string> keywords;
-	set<char> operators;
+	set<string> operators;
 	set<char> delimiters;
 
 	vector<string> buffer;
@@ -60,9 +66,9 @@ private:
 
 private:
 	int skip();							// 跳过空白和注释
-	size_type next_word(); 				// 返回下一个单词的右端，开区间
+	pair<pair<string::size_type, string::size_type>, string> next_word(); // 返回下一个单词的右端，开区间, 以及下一个单词
 	bool is_delimiter(size_type);   	// 判断给定位置处字符是否是界符
-	bool is_operator(size_type);		// 判断给定位置处字符是否是操作符
+	int is_operator(size_type);		// 判断给定位置处字符是否是操作符
 
 	bool is_delimiter(const string&);	// 判断给定字符串是否是界符
 	bool is_operator(const string&);	// 判断给字符串是否是操作符
@@ -72,8 +78,8 @@ private:
 	bool is_literal(const string&);		// 判断给定字符串是否是字符或字符串
 	bool is_identifier(const string&);	// 判断给定字符串是否是标识符
 
-	void error() {
-		cout << "Invalid identifier at line " << row << ", col " << col << cr;
+	void error(string& word) {
+		cout << "Invalid identifier at line " << row << ", col " << col << ": " << word << cr;
 	}
 public:
 	texer() { row = 0, col = 0, n = 0; }
@@ -88,11 +94,14 @@ bool texer::is_delimiter(const string& str) {
 }
 // 判断给字符串是否是操作符
 bool texer::is_operator(const string& str) {
-	return str.length() == 1 && operators.find(str[0]) != operators.end();
+	bool f = false;
+	f |= operators.find(str.substr(0, 1)) != operators.end();
+	f |= operators.find(str.substr(0, 2)) != operators.end();
+	return f;
 }
 // 判断给定字符串是否是数字
 bool texer::is_number(const string& str) {
-	for(auto ch : str) {
+	for(char ch : str) {
 		if(!isdigit(ch)) return false;
 	}
 	return true;
@@ -103,7 +112,7 @@ bool texer::is_keyword(const string& str) {
 }
 // 判断给定字符串是否是标签
 bool texer::is_label(const string& str) {
-	auto len = str.length();
+	string::size_type len = str.length();
 	if(str[len - 1] == ':' && is_identifier(str.substr(0, len - 1)))
 		return true;
 	return false;
@@ -116,15 +125,15 @@ bool texer::is_literal(const string& str) {
 }
 // 判断给定字符串是否是标识符
 bool texer::is_identifier(const string& str) {
-	if(str[0] == '_' || isalpha(str[0])) {
-		for(auto ch : str) {
+	// if(str[0] == '_' || isalpha(str[0])) {
+		for(char ch : str) {
 			if(ch != '_' && !isalpha(ch) && !isdigit(ch))
 				return false;
 		}
 		return true;
-	}
-	else
-		return false;
+	// }
+	// else
+		// return false;
 }
 
 // 跳过空格注释等
@@ -171,17 +180,18 @@ int texer::skip() {
 }
 
 // 寻找下一个独立的单词
-texer::size_type texer::next_word() {
+pair<pair<string::size_type, string::size_type>, string> texer::next_word() {
 	texer::size_type c = col;
 	// 界符
+	int len = 0;
 	if ( is_delimiter(col) ) {
-		return col + 1;
+		return pair(pair(row, col + 1), buffer[row].substr(col, 1 ));
 	}
 	// 操作符
-	else if ( is_operator(col) ) {
-		return col + 1;
+	else if ( len = is_operator(col) ) {
+		return pair(pair(row, col + len), buffer[row].substr(col, len));
 	}
-	// 其他情况，遇到界符或空格停止
+	// 字符串
 	else if ( buffer[row][col] == '"' || buffer[row][col] == '\'' ) {
 		++c;
 		if ( buffer[row][col] == '"' ) {
@@ -190,11 +200,31 @@ texer::size_type texer::next_word() {
 		else {
 			while ( c < buffer[row].length() && buffer[row][c] != '\'' ) ++c;
 		}
-		return c + 1;
+		return pair(pair(row, c + 1), buffer[row].substr(col, c + 1 - col));
 	}
+	// 其他情况，遇到界符或空格停止
 	else {
-		while ( c < buffer[row].length() && buffer[row][c] != sp && !(is_delimiter(c) && buffer[row][c] != ':') && !is_operator(c) ) ++c;
-		return c;
+		size_t r = row;
+		while ( c < buffer[row].length() && buffer[row][c] != sp && !is_delimiter(c) && !is_operator(c) ) 
+			++c;
+		if(c < buffer[row].length() && buffer[row][c] == ':')
+			++c;
+		// 续行
+		if(c < buffer[row].length() && buffer[row][c] == '\\') {
+			string word = buffer[r].substr(col, c - col);
+			word += buffer[r].substr(c + 1);	// 把 '\'后的字符全部加入
+			++r, c = 0;
+			if(r < n) {
+				// 跳过前导空格
+				while(c < buffer[r].length() && buffer[r][c] == sp) 
+					++c;
+				while ( c < buffer[r].length() && buffer[r][c] != sp && !is_delimiter(c) && !is_operator(c) )
+					++c;
+				word += buffer[r].substr(0, c);
+			}
+			return pair(pair(r, c), word);
+		}
+		return pair(pair(row, c), buffer[row].substr(col, c - col));
 	}
 }
 
@@ -202,8 +232,16 @@ bool texer::is_delimiter(texer::size_type index) {
 	return delimiters.find(buffer[row][index]) != delimiters.end();
 }
 
-bool texer::is_operator(texer::size_type index) {
-	return operators.find(buffer[row][index]) != operators.end();
+int texer::is_operator(texer::size_type index) {
+	int res = 0;
+	if(operators.find(buffer[row].substr(index, 1)) != operators.end()) {
+		res = 1;
+		if(index < buffer[row].length() - 1) {
+			if (operators.find(buffer[row].substr(index, 2)) != operators.end())
+				res = 2;
+		}
+	}
+	return res;
 }
 
 void texer::init(ifstream& src) {
@@ -221,10 +259,23 @@ void texer::init(ifstream& src) {
 	keywords.insert("else");
 	keywords.insert("goto");
 	keywords.insert("return");
+	keywords.insert("IF");
+	keywords.insert("ELSE");
+	keywords.insert("THEN");
+	keywords.insert("GOTO");
 	// 加载操作符表
-	operators.insert('+');
-	operators.insert('=');
-	operators.insert('<');
+	operators.insert("+");
+	operators.insert("=");
+	operators.insert("<");
+	operators.insert(">");
+	operators.insert("*");
+	operators.insert("+=");
+	operators.insert("-=");
+	operators.insert("*=");
+	operators.insert("/=");
+	operators.insert(">=");
+	operators.insert("<=");
+	operators.insert("==");
 	// 加载界符表
 	delimiters.insert('(');
 	delimiters.insert(')');
@@ -233,6 +284,7 @@ void texer::init(ifstream& src) {
 	delimiters.insert(',');
 	delimiters.insert(';');
 	delimiters.insert(':');
+	delimiters.insert('\\');
 }
 
 // 预处理
@@ -246,35 +298,39 @@ int texer::preprocess() {
 int texer::get_tokens() {
 	string::size_type l, r;
 	token tk;
+	ofstream ofs = ofstream("output.txt", ios::out);
 
 	while ( row < n ) {
 		if ( skip() < 0 ) break;
-		r = next_word();
+		pair<pair<string::size_type, string::size_type>, string> res = next_word();
+		r = res.first.second;
 		l = col;
 
-		string str = buffer[row].substr(l, r - l);
+		string str = res.second;
 		if(is_delimiter(str))		// 判断是界符
-			tk = token(token_type::delimiter, str);
+			tk = token(row, l, token_type::delimiter, str);
 		else if(is_operator(str))	// 判断是操作符
-			tk = token(token_type::operate, str);
+			tk = token(row, l, token_type::operate, str);
 		else if(is_keyword(str))	// 判断是关键字
-			tk = token(token_type::keyword, str);
+			tk = token(row, l, token_type::keyword, str);
 		else if(is_number(str))		// 判断是数字
-			tk = token(token_type::number, str);
+			tk = token(row, l, token_type::number, str);
 		else if(is_literal(str))	// 判断是字符或字符串
-			tk = token(token_type::literal, str);
+			tk = token(row, l, token_type::literal, str);
 		else if(is_identifier(str)) // 判断是标识符
-			tk = token(token_type::identifier, str);
+			tk = token(row, l, token_type::identifier, str);
 		else if(is_label(str)) {	// 判断是标签
 			string t = str.substr(0, str.length() - 1);
-			tk = token(token_type::label, t);
+			tk = token(row, l, token_type::label, t);
 		}
 		else {	// 错误类型，进行错误处理，词法分析结束
-			error();
+			error(str);
 			break;
 		}
-		cout << tk << cr;	// 输出识别出的 token
+		// cout << str << cr;
+		ofs << tk << cr;
 		
+		row = res.first.first;
 		col = r;
 	}
 
