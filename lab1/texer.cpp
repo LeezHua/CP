@@ -47,7 +47,7 @@ public:
 	}
 
 	friend ostream& operator << (ostream& os, token& t) {
-		os << "[" << t.row << ": " << t.col << ", " << token_type_name[t.type] << ", " << t.value << "]";
+		os << "[" << t.row << ", " << t.col << ", " << token_type_name[t.type] << ", " << t.value << "]";
 		return os;
 	}
 };
